@@ -1,56 +1,58 @@
 package guru.learningjournal.spark.examples
 
-import java.sql.Date
-
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
-import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.scalatest.{BeforeAndAfterAll, FunSuite}
+import guru.learningjournal.spark.examples.FileStreamDemo.{calculateTop10, collectAllTitles, populateCredits}
 
-case class myRow(ID: String, EventDate: Date)
+class RowDemoTest extends FunSuite with BeforeAndAfterAll{
 
-class RowDemoTest extends FunSuite with BeforeAndAfterAll {
-
-  @transient var spark: SparkSession = _
+  // why var  is a problem
+  @transient val spark: SparkSession = SparkSession.builder()
+    .appName("Demo Row Test")
+    .master("local[3]")
+    .getOrCreate()
   @transient var myDF: DataFrame = _
-
-  override def beforeAll() {
-    spark = SparkSession.builder()
-      .appName("Demo Row Test")
-      .master("local[3]")
-      .getOrCreate()
-
-    val mySchema = StructType(List(
-      StructField("ID", StringType),
-      StructField("EventDate", StringType)))
-
-    val myRows = List(Row("123", "04/05/2020"), Row("124", "4/5/2020"), Row("125", "04/5/2020"), Row("125", "4/05/2020"))
-    val myRDD = spark.sparkContext.parallelize(myRows, 2)
-    myDF = spark.createDataFrame(myRDD, mySchema)
-
-  }
 
   override def afterAll() {
     spark.stop()
   }
 
-  test("Test Data Type") {
+  case class TitleRatings(tconst: String, averageRating: Double, numVotes: Int)
+  case class Top10(tconst: String, averageRating: Double, numVotes: Int, ranking: Double)
+  //titleId	ordering	title	region	language	types	attributes	isOriginalTitle
+  case class AllTitles(titleId: String, ordering:Int, title:String,
+                       region: String, language: String, types: String, attributes: String, isOriginalTitle: Int)
 
-    val rowList = toDateDF(myDF, "M/d/y", "EventDate").collectAsList()
-    rowList.forEach(r =>
-      assert(r.get(1).isInstanceOf[Date], "Second column should be Date")
-    )
+  case class groupedTitles(titleId: String, titles: Seq[String])
 
+  test("Test calculate top 10") {
+    import spark.implicits._
+    val inputDF = Seq(
+      TitleRatings("tt0000001", 5.7, 1992),
+      TitleRatings("tt0000002", 5.8, 268),
+      TitleRatings("tt0000003", 6.5, 1879)
+    ).toDF()
+    val expectedDF: DataFrame = Seq(
+      Top10("tt0000001", 5.7, 1992, 5.86639111),
+      Top10("tt0000003", 6.5, 1879, 6.31025575)
+    ).toDF()
+    //1935.5
+    val actualDF = calculateTop10(inputDF)
+    assertDataFrameEquals(actualDF, expectedDF)
   }
 
-  test("Test Date Value") {
-    val spark2 = spark
-    import spark2.implicits._
-
-    val rowList = toDateDF(myDF, "M/d/y", "EventDate").as[myRow].collectAsList()
-
-    rowList.forEach(r =>
-      assert(r.EventDate.toString == "2020-04-05", "Date string must be 2020-04-05")
-    )
+  test("Test collect all titles") {
+    import spark.implicits._
+    val inputDF = Seq(
+      AllTitles("tt0000001", 1, "Карменсіта", "UA", "\\N", "imdbDisplay", "\\N", 0),
+      AllTitles("tt0000001", 2, "Carmencita", "DE", "\\N", "\\N", "literal title", 0),
+      AllTitles("tt0000001", 3, "Carmencita - spanyol tánc", "HU", "\\N", "imdbDisplay", "\\N", 0),
+    ).toDF()
+    val expectedDF: DataFrame = Seq(
+      groupedTitles("tt0000001", Seq("Карменсіта", "Carmencita", "Carmencita - spanyol tánc")),
+    ).toDF()
+    val actualDF = collectAllTitles(inputDF)
+    assertDataFrameEquals(actualDF, expectedDF)
   }
 
 }
