@@ -12,7 +12,7 @@ object FileDemo extends Serializable {
                        region: String, language: String, types: String, attributes: String, isOriginalTitle: Int)
   case class TitlePrincipals(tconst: String, ordering: Int, nconst: String, category: String, job:String, characters: String)
   case class NameBasics(nconst: String, primaryName: String, birthYear: Int, deathYear: String, primaryProfession: String, knownForTitles: String)
-  case class Top10(tconst: String, averageRating: Double, numVotes: Int, ranking: Double)
+  case class Top10(tconst: String, averageRating: Double, numVotes: Int, ranking: Option[Double])
   case class groupedTitles(titleId: String, titles: Seq[String])
 
   @transient lazy val logger: Logger = Logger.getLogger(getClass.getName)
@@ -42,6 +42,7 @@ object FileDemo extends Serializable {
       .option("inferSchema", "true")
       .load("input/title.ratings.tsv")
       .as[TitleRatings]
+      .toDF()
 
     val titlesDF = spark.read
       .format("csv")
@@ -50,6 +51,7 @@ object FileDemo extends Serializable {
       .option("inferSchema", "true")
       .load("input/title.akas.tsv")
       .as[TitleAkas]
+      .toDF()
 
     val creditsDF = spark.read
       .format("csv")
@@ -58,6 +60,7 @@ object FileDemo extends Serializable {
       .option("inferSchema", "true")
       .load("input/title.principals.tsv")
       .as[TitlePrincipals]
+      .toDF()
 
     val namesDF = spark.read
       .format("csv")
@@ -66,6 +69,7 @@ object FileDemo extends Serializable {
       .option("inferSchema", "true")
       .load("input/name.basics.tsv")
       .as[NameBasics]
+      .toDF()
 
     val topDF = calculateTop10(titleRatingsDF)
     val allTitlesDF = collectAllTitles(titlesDF)
@@ -80,25 +84,25 @@ object FileDemo extends Serializable {
     joined2DF.show()
   }
 
-  def calculateTop10(titleRatingsDF: Dataset[TitleRatings]): DataFrame = {
+  def calculateTop10(titleRatingsDF: DataFrame): DataFrame = {
     val filteredTitleRatingsDF = titleRatingsDF.filter(col(numVotes) >= 500)
     val avgValue = filteredTitleRatingsDF.select(avg(numVotes)).first().getDouble(0)
     val calculatedDF = filteredTitleRatingsDF.withColumn(
       ranking,
-      (col(numVotes).cast(IntegerType) / avgValue) *
-        col(averageRating).cast(DoubleType)
+      round((col(numVotes).cast(IntegerType) / avgValue) *
+        col(averageRating).cast(DoubleType),2)
     )
     val orderedDF = calculatedDF.orderBy(col(ranking).desc)
     val topDF = orderedDF.limit(2)
     topDF
   }
 
-  def collectAllTitles(titlesDF: Dataset[TitleAkas]): DataFrame = {
+  def collectAllTitles(titlesDF: DataFrame): DataFrame = {
     val groupedTitlesDF = titlesDF.groupBy(titleId).agg(collect_list(title).as(titles))
     groupedTitlesDF
   }
 
-  def populateCredits(creditsDF: Dataset[TitlePrincipals], namesDF: Dataset[NameBasics]): DataFrame = {
+  def populateCredits(creditsDF: DataFrame, namesDF: DataFrame): DataFrame = {
     val creditedNamesDF = creditsDF.join(namesDF, Seq(nconst), inner)
     val groupedCreditsDF = creditedNamesDF.groupBy(tconst).agg(collect_list(primaryName).as(credited))
     groupedCreditsDF
