@@ -5,21 +5,23 @@ import org.apache.spark.sql.execution.streaming.FileStreamSource.Timestamp
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.streaming._
-import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
+import org.apache.spark.sql.{DataFrame, Dataset, Encoders, SparkSession}
 
 import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 
 object FileStreamDemo extends Serializable {
   @transient lazy val logger: Logger = Logger.getLogger(getClass.getName)
 
   // Define a case class to represent salary data
-  case class TitleRating(tconst: String, averageRating: Double, numVotes: Long)
-  case class TitleRatingWithAverage(tconst: String, averageRating: Double, numVotes: Long, average:Double)
+  case class TitleRating(sno:Long, tconst: String, averageRating: Double, numVotes: Long, timeSt: String)
+  case class TitleRatingWithAverage(sno: Long, tconst: String, averageRating: Double, numVotes: Long, average:Double)
+  val localDateTimeEncoder = Encoders.javaSerialization(classOf[LocalDateTime])
 
   case class TitleRatingState(sum: Long, count: Long)
 
-  def updateStateWithAverage(tconst: String, records: Iterator[TitleRating], state: GroupState[TitleRatingState]
+  def updateStateWithAverage(sno: Long, records: Iterator[TitleRating], state: GroupState[TitleRatingState]
                             ): Iterator[Seq[TitleRatingWithAverage]] = {
     val newState = state.getOption.getOrElse(TitleRatingState(0, 0))
     val recordsSeq = records.toSeq
@@ -38,6 +40,8 @@ object FileStreamDemo extends Serializable {
       Iterator(TitleRatingWithAverages)
     }
   }
+
+
 
   def main(args: Array[String]): Unit = {
 
@@ -66,25 +70,28 @@ object FileStreamDemo extends Serializable {
 
     // Define a schema for the input data
     val schema = "tconst STRING, averageRating DOUBLE, numVotes LONG"
-
+    val pattern = "yyyy-MM-dd HH:mm:ss"
+    val formatter = DateTimeFormatter.ofPattern(pattern)
+    val currentDateTime = LocalDateTime.now()
+    val formattedDateTime = currentDateTime.format(formatter)
     // Parse the CSV data by specifying the schema
     val titleRatingsDF = socketDF
       .map(_.split("\t"))
-      .map(attributes => TitleRating(attributes(0), attributes(1).toDouble, attributes(2).toLong))
+      .map(attributes => TitleRating(1, attributes(0), attributes(1).toDouble, attributes(2).toLong, LocalDateTime.now().format(formatter)))
 
    /* val parsedDF = socketDF
       .selectExpr(s"cast(value as $schema)")*/
 
-/*
+
 import spark.implicits._
     val statefulAvgDF = titleRatingsDF
-      .groupByKey(record => record.tconst)
+      .groupByKey(record => record.sno)
       .flatMapGroupsWithState(
         outputMode = OutputMode.Update(),
         timeoutConf = GroupStateTimeout.NoTimeout()
       )(updateStateWithAverage)
 
-   // val topDF = calculateTop10(titleRatingsDF)
+ /*  // val topDF = calculateTop10(titleRatingsDF)
     val wordCountQuery = statefulAvgDF.writeStream
       .format("console")
       //.option("numRows", 2)
@@ -116,12 +123,12 @@ import spark.implicits._
        .option("maxFilesPerTrigger", 1)
        .load("input/name.basics.tsv")*/
 
-    val topDF = calculateTop10(titleRatingsDF)
+    //val topDF = calculateTop10(titleRatingsDF)
     // val topDF = calculateTop10(titleRatingsDF)
-    val wordCountQuery = topDF.writeStream
+    val wordCountQuery = statefulAvgDF.writeStream
       .format("console")
       //.option("numRows", 2)
-      .outputMode("append")
+      .outputMode("complete")
       .option("checkpointLocation", "chk-point-dir")
       .start()
 
@@ -163,20 +170,24 @@ import spark.implicits._
   def calculateTop10(titleRatingsDF: Dataset[TitleRating]): DataFrame = {
     //logger.info("titleRatingsDF:")
     // titleRatingsDF.show()
-    val filteredTitleRatingsDF = titleRatingsDF.filter(col("numVotes") >= 500).withColumn("timestamp", current_timestamp())
+    val filteredTitleRatingsDF = titleRatingsDF
+      .withColumn("timestampColumn",to_timestamp(col("timeSt"), "yyyy-MM-dd HH:mm:ss"))
+      .filter(col("numVotes") >= 500).withWatermark("timestampColumn","1 minute")
 
     //logger.info("filteredTitleRatingsDF:")
     // filteredTitleRatingsDF.show()
-    //val avgDF = filteredTitleRatingsDF.groupBy("tconst").agg(avg("numVotes").as("average"))
+    val avgDF = filteredTitleRatingsDF.withWatermark("timestampColumn","1 minute")
+      .groupBy("sno").agg(avg("numVotes").as("average"))
+
     //val windowSpec = Window.orderBy()
     //val allRowsAvgDF = filteredTitleRatingsDF.withColumn("average", avg("numVotes").over(windowSpec))
     //val avgValue = filteredTitleRatingsDF.select(avg("numVotes")).first().getDouble(0)
-    val windowSpec = Window.orderBy("timestamp").rowsBetween(Window.unboundedPreceding, Window.currentRow)
-    val rollingAvgDF = filteredTitleRatingsDF
-      .withColumn("average", avg("numVotes").over(windowSpec))
-    val rankedDF = rollingAvgDF
-      .orderBy(desc("average"))
-      .withColumn("rank", dense_rank().over(Window.orderBy(desc("average"))))
+   // val windowSpec = Window.orderBy("timestamp").rowsBetween(Window.unboundedPreceding, Window.currentRow)
+    //val rollingAvgDF = filteredTitleRatingsDF
+     // .withColumn("average", avg("numVotes").over(windowSpec))
+   // val rankedDF = rollingAvgDF
+      //.orderBy(desc("average"))
+      //.withColumn("rank", dense_rank().over(Window.orderBy(desc("average"))))
 
     // logger.info("Average value:")
     //logger.info(avgValue)
@@ -186,13 +197,14 @@ import spark.implicits._
        (col("numVotes").cast(IntegerType) / avgValue) *
          col("averageRating").cast(DoubleType)
      )*/
-/*    val rankedDF = filteredTitleRatingsDF
-      .groupBy().agg(avg("numVotes").alias("average"))
-      // .join(avgDF, Seq("tconst"), "inner")
-      .withColumn("Ranking", col("numVotes") / col("average") * col("averageRating"))
+   val rankedDF = filteredTitleRatingsDF
+     // .groupBy().agg(avg("numVotes").alias("average"))
+       .join(avgDF, Seq("sno"), "inner")
+      .withColumn("Ranking", (col("numVotes") / col("average") )* col("averageRating"))
       //.select("tconst", "Ranking")
       .orderBy(desc("Ranking"))
-      .limit(2)*/
+      .limit(2)
+      .withWatermark("timestampColumn","1 minute")
     //  logger.info("calculated:")
     //calculatedDF.show()
     //val orderedDF = calculatedDF.orderBy(col("ranking").desc)
