@@ -16,28 +16,27 @@ object FileStreamDemo extends Serializable {
 
   // Define a case class to represent salary data
   case class TitleRating(sno:Long, tconst: String, averageRating: Double, numVotes: Long, timeSt: String)
-  case class TitleRatingWithAverage(sno: Long, tconst: String, averageRating: Double, numVotes: Long, average:Double)
+  case class TitleRatingWithAverage(tconst: String, averageRating: Double, numVotes: Long, average:Double)
   val localDateTimeEncoder = Encoders.javaSerialization(classOf[LocalDateTime])
 
   case class TitleRatingState(sum: Long, count: Long)
 
-  def updateStateWithAverage(sno: Long, records: Iterator[TitleRating], state: GroupState[TitleRatingState]
-                            ): Iterator[Seq[TitleRatingWithAverage]] = {
-    val newState = state.getOption.getOrElse(TitleRatingState(0, 0))
+  def updateStateWithAverage(sno: Long, records: Iterator[TitleRating], state: GroupState[Map[String,TitleRatingWithAverage]]
+                            ): Iterator[Map[String,TitleRatingWithAverage]] = {
+    val mapFromState = state.getOption.getOrElse(Map.empty)
     val recordsSeq = records.toSeq
-    val newSum = recordsSeq.map(_.numVotes).sum + newState.sum
-    val newCount = recordsSeq.size + newState.count
-    val average:Double = newSum/ newCount
-    val TitleRatingWithAverages:Seq[TitleRatingWithAverage] = recordsSeq.map(x => TitleRatingWithAverage(x.tconst, x.averageRating, x.numVotes,average))
+    val titleRatingWithAverages:Map[String, TitleRatingWithAverage] = recordsSeq.map(x => x.tconst -> TitleRatingWithAverage(x.tconst, x.averageRating, x.numVotes,0.0)).toMap
+    val updated = mapFromState ++ titleRatingWithAverages
+    // Calculate the sum of values and the total count
+    val (sum, count) = updated.foldLeft(0.0, 0) {
+      case ((s, c), (_, value)) => (s + value.numVotes, c + 1)
+    }
+    // Calculate the average
+    val newAvg = if (count > 0) sum / count else 0.0
+    val updatedAverage = updated.mapValues(x => x.copy(average = newAvg))
 
-    logger.info("new sum")
-    logger.info(newSum)
-
-    state.update(TitleRatingState(newSum, newCount))
-    if (newCount != 0) {
-      Iterator(TitleRatingWithAverages)
-    } else {
-      Iterator(TitleRatingWithAverages)
+    state.update(updatedAverage)
+      Iterator(updatedAverage)
     }
   }
 
