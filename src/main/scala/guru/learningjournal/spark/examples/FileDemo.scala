@@ -14,6 +14,7 @@ object FileDemo extends Serializable {
   case class NameBasics(nconst: String, primaryName: String, birthYear: Int, deathYear: String, primaryProfession: String, knownForTitles: String)
   case class Top10(tconst: String, averageRating: Double, numVotes: Int, ranking: Option[Double])
   case class groupedTitles(titleId: String, titles: Seq[String])
+  case class Credited(tconst: String, credited: Seq[String])
 
   @transient lazy val logger: Logger = Logger.getLogger(getClass.getName)
   val spark = SparkSession.builder()
