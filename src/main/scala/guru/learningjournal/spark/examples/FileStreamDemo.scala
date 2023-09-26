@@ -11,12 +11,14 @@ import java.time.format.DateTimeFormatter
 object FileStreamDemo extends Serializable {
   @transient lazy val logger: Logger = Logger.getLogger(getClass.getName)
 
-  case class TitleRating(sno: Long, tconst: String, averageRating: Double, numVotes: Long, timeSt: String)
+  case class TitleRating(sno: Long, tconst: String, averageRating: Double, numVotes: Long)
 
   case class TitleRatingWithAverage(tconst: String, averageRating: Double, numVotes: Long, average: Double)
 
+  case class Result(titleRatingWithAverages: Seq[TitleRatingWithAverage])
+
   def updateStateWithAverage(sno: Long, records: Iterator[TitleRating], state: GroupState[Map[String, TitleRatingWithAverage]]
-                            ): Iterator[Map[String, TitleRatingWithAverage]] = {
+                            ): Iterator[TitleRatingWithAverage] = {
     val mapFromState = state.getOption.getOrElse(Map.empty)
     val recordsSeq = records.toSeq
     val titleRatingWithAverages: Map[String, TitleRatingWithAverage] = recordsSeq.map(x => x.tconst -> TitleRatingWithAverage(x.tconst, x.averageRating, x.numVotes, 0.0)).toMap
@@ -28,8 +30,9 @@ object FileStreamDemo extends Serializable {
     // Calculate the average
     val newAvg = if (count > 0) sum / count else 0.0
     val updatedAverage = updated.mapValues(x => x.copy(average = newAvg))
+    val resultValues = updatedAverage.values.toSeq
     state.update(updatedAverage)
-    Iterator(updatedAverage)
+    resultValues.iterator
   }
 
   def main(args: Array[String]): Unit = {
@@ -46,16 +49,10 @@ object FileStreamDemo extends Serializable {
       .option("port", "9999")
       .load()
       .as[String]
-    // Define a schema for the input data
-    val schema = "tconst STRING, averageRating DOUBLE, numVotes LONG"
-    val pattern = "yyyy-MM-dd HH:mm:ss"
-    val formatter = DateTimeFormatter.ofPattern(pattern)
-    val currentDateTime = LocalDateTime.now()
-    val formattedDateTime = currentDateTime.format(formatter)
     // Parse the CSV data by specifying the schema
     val titleRatingsDF = socketDF
       .map(_.split("\t"))
-      .map(attributes => TitleRating(1, attributes(0), attributes(1).toDouble, attributes(2).toLong, LocalDateTime.now().format(formatter)))
+      .map(attributes => TitleRating(1, attributes(0), attributes(1).toDouble, attributes(2).toLong))
 
     val statefulAvgDF = titleRatingsDF
       .groupByKey(record => record.sno)
