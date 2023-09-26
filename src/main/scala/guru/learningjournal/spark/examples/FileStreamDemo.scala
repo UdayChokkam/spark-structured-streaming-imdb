@@ -38,7 +38,7 @@ object FileStreamDemo extends Serializable {
       .config("spark.sql.streaming.schemaInference", "true")
       .getOrCreate()
     import spark.implicits._
-    /*    val rawTitleRatingsDF = spark.readStream
+        val rawTitleRatingsDF = spark.readStream
           .format("socket")
           .option("host", "localhost")
           .option("port", "9999")
@@ -49,9 +49,8 @@ object FileStreamDemo extends Serializable {
             .map(_.split("\t"))
             .map(attributes => TitleRating(1, attributes(0), attributes(1).toDouble, attributes(2).toLong))
 
-          */
 
-    val rawTitleRatingsDF = spark.readStream
+   /* val rawTitleRatingsDF = spark.readStream
       .format("csv")
       .option("delimiter", "\t")
       .option("path", "ratings")
@@ -61,7 +60,7 @@ object FileStreamDemo extends Serializable {
 
     // Parse the CSV data by specifying the schema
     val titleRatingsDF = rawTitleRatingsDF
-      .map(attributes => TitleRating(1, attributes(0).toString, attributes.get(1).toString.toDouble, attributes(2).toString.toLong))
+      .map(attributes => TitleRating(1, attributes(0).toString, attributes.get(1).toString.toDouble, attributes(2).toString.toLong))*/
 
     val topDF = titleRatingsDF
       .groupByKey(record => record.sno)
@@ -80,7 +79,26 @@ object FileStreamDemo extends Serializable {
 
     val titleAkasDF = rawTitleAkasDF.groupBy("titleId").agg(collect_list("title").as("titles"))
 
-    val wordCountQuery = titleAkasDF.writeStream
+
+    val rawTitlePrincipalsDF = spark.readStream
+      .format("csv")
+      .option("delimiter", "\t")
+      .option("path", "principals")
+      .option("header", "true")
+      .option("maxFilesPerTrigger", 1)
+      .load()
+
+    val rawNamesDF = spark.readStream
+      .format("csv")
+      .option("delimiter", "\t")
+      .option("path", "names")
+      .option("header", "true")
+      .option("maxFilesPerTrigger", 1)
+      .load()
+
+    val principalNamesDF = rawTitlePrincipalsDF.join(rawNamesDF, Seq("nconst"), "inner")
+
+    val wordCountQuery = topDF.writeStream
       .format("console")
       .outputMode("update")
       .option("checkpointLocation", "chk-point-dir")
