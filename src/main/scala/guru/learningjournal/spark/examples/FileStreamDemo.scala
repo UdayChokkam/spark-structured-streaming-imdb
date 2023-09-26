@@ -4,24 +4,18 @@ import org.apache.log4j.Logger
 import org.apache.spark.sql.streaming._
 import org.apache.spark.sql.SparkSession
 
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
-
-
 object FileStreamDemo extends Serializable {
   @transient lazy val logger: Logger = Logger.getLogger(getClass.getName)
 
   case class TitleRating(sno: Long, tconst: String, averageRating: Double, numVotes: Long)
 
-  case class TitleRatingWithAverage(tconst: String, averageRating: Double, numVotes: Long, average: Double)
-
-  case class Result(titleRatingWithAverages: Seq[TitleRatingWithAverage])
+  case class TitleRatingWithAverage(tconst: String, averageRating: Double, numVotes: Long, average: Double, rankingCalc: Double)
 
   def updateStateWithAverage(sno: Long, records: Iterator[TitleRating], state: GroupState[Map[String, TitleRatingWithAverage]]
                             ): Iterator[TitleRatingWithAverage] = {
     val mapFromState = state.getOption.getOrElse(Map.empty)
     val recordsSeq = records.toSeq
-    val titleRatingWithAverages: Map[String, TitleRatingWithAverage] = recordsSeq.map(x => x.tconst -> TitleRatingWithAverage(x.tconst, x.averageRating, x.numVotes, 0.0)).toMap
+    val titleRatingWithAverages: Map[String, TitleRatingWithAverage] = recordsSeq.map(x => x.tconst -> TitleRatingWithAverage(x.tconst, x.averageRating, x.numVotes, 0.0, 0.0)).toMap
     val updated = mapFromState ++ titleRatingWithAverages
     // Calculate the sum of values and the total count
     val (sum, count) = updated.foldLeft(0.0, 0) {
@@ -29,8 +23,8 @@ object FileStreamDemo extends Serializable {
     }
     // Calculate the average
     val newAvg = if (count > 0) sum / count else 0.0
-    val updatedAverage = updated.mapValues(x => x.copy(average = newAvg))
-    val resultValues = updatedAverage.values.toSeq
+    val updatedAverage = updated.mapValues(x => x.copy(average = newAvg, rankingCalc = (x.numVotes / newAvg) * x.averageRating))
+    val resultValues = updatedAverage.values.toSeq.sortBy(_.rankingCalc).reverse.take(2)
     state.update(updatedAverage)
     resultValues.iterator
   }
@@ -43,25 +37,39 @@ object FileStreamDemo extends Serializable {
       .config("spark.sql.streaming.schemaInference", "true")
       .getOrCreate()
     import spark.implicits._
-    val socketDF = spark.readStream
-      .format("socket")
-      .option("host", "localhost")
-      .option("port", "9999")
-      .load()
-      .as[String]
-    // Parse the CSV data by specifying the schema
-    val titleRatingsDF = socketDF
-      .map(_.split("\t"))
-      .map(attributes => TitleRating(1, attributes(0), attributes(1).toDouble, attributes(2).toLong))
+    /*    val rawDF = spark.readStream
+          .format("socket")
+          .option("host", "localhost")
+          .option("port", "9999")
+          .load()
+          .as[String]
 
-    val statefulAvgDF = titleRatingsDF
+          val titleRatingsDF = rawDF
+            .map(_.split("\t"))
+            .map(attributes => TitleRating(1, attributes(0), attributes(1).toDouble, attributes(2).toLong))
+
+          */
+
+    val rawDF = spark.readStream
+      .format("csv")
+      .option("delimiter", "\t")
+      .option("path", "inputstream")
+      .option("header", "true")
+      .option("maxFilesPerTrigger", 1)
+      .load()
+
+    // Parse the CSV data by specifying the schema
+    val titleRatingsDF = rawDF
+      .map(attributes => TitleRating(1, attributes(0).toString, attributes.get(1).toString.toDouble, attributes(2).toString.toLong))
+
+    val statefulTopDF = titleRatingsDF
       .groupByKey(record => record.sno)
       .flatMapGroupsWithState(
         outputMode = OutputMode.Update(),
         timeoutConf = GroupStateTimeout.NoTimeout()
       )(updateStateWithAverage)
 
-    val wordCountQuery = statefulAvgDF.writeStream
+    val wordCountQuery = statefulTopDF.writeStream
       .format("console")
       .outputMode("update")
       .option("checkpointLocation", "chk-point-dir")
