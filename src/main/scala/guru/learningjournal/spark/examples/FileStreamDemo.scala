@@ -3,6 +3,7 @@ package guru.learningjournal.spark.examples
 import org.apache.log4j.Logger
 import org.apache.spark.sql.streaming._
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions.{col, collect_list, expr}
 
 object FileStreamDemo extends Serializable {
   @transient lazy val logger: Logger = Logger.getLogger(getClass.getName)
@@ -37,39 +38,49 @@ object FileStreamDemo extends Serializable {
       .config("spark.sql.streaming.schemaInference", "true")
       .getOrCreate()
     import spark.implicits._
-    /*    val rawDF = spark.readStream
+    /*    val rawTitleRatingsDF = spark.readStream
           .format("socket")
           .option("host", "localhost")
           .option("port", "9999")
           .load()
           .as[String]
 
-          val titleRatingsDF = rawDF
+          val titleRatingsDF = rawTitleRatingsDF
             .map(_.split("\t"))
             .map(attributes => TitleRating(1, attributes(0), attributes(1).toDouble, attributes(2).toLong))
 
           */
 
-    val rawDF = spark.readStream
+    val rawTitleRatingsDF = spark.readStream
       .format("csv")
       .option("delimiter", "\t")
-      .option("path", "inputstream")
+      .option("path", "ratings")
       .option("header", "true")
       .option("maxFilesPerTrigger", 1)
       .load()
 
     // Parse the CSV data by specifying the schema
-    val titleRatingsDF = rawDF
+    val titleRatingsDF = rawTitleRatingsDF
       .map(attributes => TitleRating(1, attributes(0).toString, attributes.get(1).toString.toDouble, attributes(2).toString.toLong))
 
-    val statefulTopDF = titleRatingsDF
+    val topDF = titleRatingsDF
       .groupByKey(record => record.sno)
       .flatMapGroupsWithState(
         outputMode = OutputMode.Update(),
         timeoutConf = GroupStateTimeout.NoTimeout()
       )(updateStateWithAverage)
 
-    val wordCountQuery = statefulTopDF.writeStream
+    val rawTitleAkasDF = spark.readStream
+      .format("csv")
+      .option("delimiter", "\t")
+      .option("path", "akas")
+      .option("header", "true")
+      .option("maxFilesPerTrigger", 1)
+      .load()
+
+    val titleAkasDF = rawTitleAkasDF.groupBy("titleId").agg(collect_list("title").as("titles"))
+
+    val wordCountQuery = titleAkasDF.writeStream
       .format("console")
       .outputMode("update")
       .option("checkpointLocation", "chk-point-dir")
